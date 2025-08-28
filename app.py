@@ -174,7 +174,7 @@ def create_report():
         location_lng = request.form.get('longitude', '')
         
         # Insert data into Supabase table
-        data, count = supabase.from_("reports").insert({
+        response = supabase.from_("reports").insert({
             'issue_type': issue_type,
             'custom_issue': custom_issue if issue_type == 'custom' else None,
             'description': description,
@@ -183,13 +183,16 @@ def create_report():
             'longitude': float(location_lng) if location_lng else None,
             'image_filename': image_filename
         }).execute()
-        
+
+        # The returned response has a 'data' key which is the list of inserted rows
+        inserted_data = response.data
+
         # Check if insertion was successful
-        if data:
+        if inserted_data:
             return jsonify({
                 'success': True,
                 'message': 'Report submitted successfully',
-                'report_id': data[1]['id']
+                'report_id': inserted_data[0]['id'] # Access the 'id' from the first item in the list
             }), 201
         else:
             raise Exception("Supabase insertion failed.")
