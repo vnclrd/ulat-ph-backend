@@ -3,12 +3,17 @@ from flask_cors import CORS
 from geopy.geocoders import Nominatim
 
 # Imports for file and information saving
-from flask import send_from_directory
 import os
 import json
 import uuid
 from datetime import datetime
 from werkzeug.utils import secure_filename
+from supabase import create_client, Client
+
+# Supabase credentials (you will get these from your Supabase dashboard)
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}}) # resources for testing
@@ -102,14 +107,6 @@ def save_reports(reports):
     with open(DATA_FILE, 'w') as f:
         json.dump(reports, f, indent=2)
 
-def delete_report_files(report):
-    """Delete associated image file for a report"""
-    if report.get('image_filename'):
-        image_path = os.path.join(UPLOAD_FOLDER, report['image_filename'])
-        if os.path.exists(image_path):
-            os.remove(image_path)
-
-# FILE SAVING COMPONENTS
 @app.route('/api/reports', methods=['POST'])
 def create_report():
     try:
@@ -118,10 +115,25 @@ def create_report():
         if 'image' in request.files:
             file = request.files['image']
             if file and file.filename != '' and allowed_file(file.filename):
-                # Generate unique filename
-                file_extension = file.filename.rsplit('.', 1)[1].lower()
-                image_filename = f"{uuid.uuid4()}.{file_extension}"
-                file.save(os.path.join(UPLOAD_FOLDER, image_filename))
+                try:
+                    # Generate a unique filename using UUID
+                    file_extension = secure_filename(file.filename).rsplit('.', 1)[1].lower()
+                    image_uuid = str(uuid.uuid4())
+                    image_filename = f"{image_uuid}.{file_extension}"
+                    
+                    # Upload file to Supabase Storage
+                    # The path is inside the 'images' folder within your 'reports-images' bucket
+                    supabase_upload_path = f"images/{image_filename}"
+                    supabase.storage.from_("reports-images").upload(
+                        file=file.read(),
+                        path=supabase_upload_path,
+                        file_options={"content-type": file.content_type}
+                    )
+                except Exception as e:
+                    return jsonify({
+                        'success': False,
+                        'message': f'Error uploading image to Supabase: {str(e)}'
+                    }), 500
 
         # Get form data
         issue_type = request.form.get('issueType', '')
@@ -298,8 +310,13 @@ def add_resolved(report_id):
         
         # Check if resolved count reached 10 - delete the report
         if report['resolved']['count'] >= 10:
-            # Delete associated image file
-            delete_report_files(report)
+            # Delete associated image file from Supabase Storage
+            image_filename = report.get('image_filename')
+            if image_filename:
+                try:
+                    supabase.storage.from_("reports-images").remove([f"images/{image_filename}"])
+                except Exception as e:
+                    print(f"Error deleting image from Supabase: {e}")
             
             # Remove report from list
             reports.pop(report_index)
@@ -410,8 +427,13 @@ def delete_report(report_id):
                 'message': 'Report not found'
             }), 404
         
-        # Delete associated image file
-        delete_report_files(report)
+        # Delete associated image file from Supabase Storage
+        image_filename = report.get('image_filename')
+        if image_filename:
+            try:
+                supabase.storage.from_("reports-images").remove([f"images/{image_filename}"])
+            except Exception as e:
+                print(f"Error deleting image from Supabase: {e}")
         
         # Remove report from list
         reports = [r for r in reports if r['id'] != report_id]
@@ -427,11 +449,6 @@ def delete_report(report_id):
             'success': False,
             'message': f'Error deleting report: {str(e)}'
         }), 500
-
-@app.route('/api/images/<filename>')
-def serve_image(filename):
-    """Serve uploaded images"""
-    return send_from_directory(UPLOAD_FOLDER, filename)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', debug=True, port=5000)

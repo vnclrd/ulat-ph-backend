@@ -1,0 +1,7 @@
+Flask
+Flask-Cors
+geopy
+python-dotenv
+supabase
+werkzeug
+gunicorn
