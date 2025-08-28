@@ -376,34 +376,34 @@ def get_report(report_id):
             'message': f'Error fetching report: {str(e)}'
         }), 500
 
+# Update sighting count and add entry to sighting_clicks table
 @app.route('/api/reports/<report_id>/sightings', methods=['POST'])
 def add_sighting(report_id):
     try:
         # Get the IP address of the client
         client_ip = get_client_ip()
 
+        # Get the current sightings JSONB object from the reports table
+        reports_response = supabase.from_("reports").select("sightings").eq("id", report_id).single().execute()
+        sightings_data = reports_response.data.get("sightings")
+
+        # Initialize data if it's not present or invalid
+        if not isinstance(sightings_data, dict) or "user_ips" not in sightings_data or "count" not in sightings_data:
+            sightings_data = {"count": 0, "user_ips": []}
+
         # Check if the user has already recorded a sighting for this report
-        existing_sighting = supabase.from_("sighting_clicks").select("*").eq("report_id", report_id).eq("client_ip", client_ip).execute().data
-        if existing_sighting:
+        if client_ip in sightings_data["user_ips"]:
             return jsonify({
                 'success': False,
                 'message': "You've already recorded a sighting for this report."
             }), 409 # Conflict
 
-        # Increment sightings count in the reports table
-        reports_response = supabase.from_("reports").select("sightings").eq("id", report_id).single().execute()
-        
-        # Safely get the value and convert to an integer. If the value is null, it defaults to 0.
-        current_sightings = int(reports_response.data.get("sightings", 0)) if reports_response.data and reports_response.data.get("sightings") is not None else 0
-        
-        # Update sightings count in the reports table
-        supabase.from_("reports").update({"sightings": current_sightings + 1}).eq("id", report_id).execute()
+        # Increment count and add IP
+        sightings_data["count"] += 1
+        sightings_data["user_ips"].append(client_ip)
 
-        # Record the user's sighting in the clicks table
-        supabase.from_("sighting_clicks").insert({
-            'report_id': report_id,
-            'client_ip': client_ip
-        }).execute()
+        # Update sightings JSONB object in the reports table
+        supabase.from_("reports").update({"sightings": sightings_data}).eq("id", report_id).execute()
 
         return jsonify({
             'success': True,
@@ -416,40 +416,37 @@ def add_sighting(report_id):
             'message': f'Error updating sighting: {str(e)}'
         }), 500
 
+# Update resolved status and add entry to resolved_clicks table
 @app.route('/api/reports/<report_id>/resolved', methods=['POST'])
 def add_resolved(report_id):
     try:
         # Get the IP address of the client
         client_ip = get_client_ip()
 
+        # Get the current resolved JSONB object from the reports table
+        reports_response = supabase.from_("reports").select("resolved").eq("id", report_id).single().execute()
+        resolved_data = reports_response.data.get("resolved")
+        
+        # Initialize data if it's not present or invalid
+        if not isinstance(resolved_data, dict) or "user_ips" not in resolved_data or "count" not in resolved_data:
+            resolved_data = {"count": 0, "user_ips": []}
+
         # Check if the user has already recorded a resolved click for this report
-        existing_resolved_click = supabase.from_("resolved_clicks").select("*").eq("report_id", report_id).eq("client_ip", client_ip).execute().data
-        if existing_resolved_click:
+        if client_ip in resolved_data["user_ips"]:
             return jsonify({
                 'success': False,
                 'message': "You've already recorded this as resolved."
             }), 409
 
-        # Increment resolved count in the reports table
-        reports_response = supabase.from_("reports").select("resolved").eq("id", report_id).single().execute()
+        # Increment count and add IP
+        resolved_data["count"] += 1
+        resolved_data["user_ips"].append(client_ip)
 
-        # Safely get the value and convert to an integer. If the value is null, it defaults to 0.
-        current_resolved_count = int(reports_response.data.get("resolved", 0)) if reports_response.data and reports_response.data.get("resolved") is not None else 0
-        
-        # Update resolved count in the reports table
-        supabase.from_("reports").update({"resolved": current_resolved_count + 1}).eq("id", report_id).execute()
+        # Update resolved JSONB object in the reports table
+        supabase.from_("reports").update({"resolved": resolved_data}).eq("id", report_id).execute()
 
-        # Record the user's resolved click
-        supabase.from_("resolved_clicks").insert({
-            'report_id': report_id,
-            'client_ip': client_ip
-        }).execute()
-
-        # Get the updated resolved count to check if we should delete the report
-        reports_response_after = supabase.from_("reports").select("resolved").eq("id", report_id).single().execute()
-        current_resolved_count_after = int(reports_response_after.data.get("resolved", 0)) if reports_response_after.data and reports_response_after.data.get("resolved") is not None else 0
-
-        if current_resolved_count_after >= 5:
+        # Check if the report should be deleted
+        if resolved_data["count"] >= 5:
             supabase.from_("reports").delete().eq("id", report_id).execute()
             return jsonify({
                 'success': True,
