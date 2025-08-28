@@ -61,6 +61,37 @@ def reverse_geocode():
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+    
+@app.route('/geocode', methods=['POST'])
+def geocode():
+    """Convert an address to latitude and longitude"""
+    data = request.get_json()
+    address = data.get('address')
+    
+    if not address:
+        return jsonify({'error': 'Address is required'}), 400
+
+    try:
+        # Use geolocator to find the location details from the address
+        location_data = geolocator.geocode(address)
+        
+        if location_data:
+            return jsonify({
+                'success': True,
+                'location_name': location_data.address,
+                'latitude': location_data.latitude,
+                'longitude': location_data.longitude
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'message': 'Location not found'
+            }), 404
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': f'Geocoding error: {str(e)}'
+        }), 500
 
 # Manual entering of location
 @app.route('/save-location', methods=['POST'])
