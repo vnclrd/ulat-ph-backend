@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from geopy.geocoders import Nominatim
+from math import radians, sin, cos, sqrt, atan2
 
 # Imports for file and information saving
 import os
@@ -36,6 +37,20 @@ def get_client_ip():
     else:
         ip = request.remote_addr
     return ip
+
+def haversine(lat1, lon1, lat2, lon2):
+    """
+    Calculate the distance between two points on Earth
+    using the Haversine formula.
+    """
+    R = 6371  # Radius of Earth in kilometers
+    lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+    dlon = lon2 - lon1
+    dlat = lat2 - lat1
+    a = sin(dlat / 2)**2 + cos(lat1) * cos(lat2) * sin(dlon / 2)**2
+    c = 2 * atan2(sqrt(a), sqrt(1 - a))
+    distance = R * c
+    return distance
 
 @app.route('/')
 def home():
@@ -120,6 +135,32 @@ def save_location():
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+    
+# API endpoint to get all reports from Supabase
+@app.route('/api/reports', methods=['GET'])
+def get_reports():
+    try:
+        # Get latitude and longitude from query parameters
+        user_lat = request.args.get('latitude', type=float)
+        user_lng = request.args.get('longitude', type=float)
+
+        # Retrieve all reports from Supabase
+        response = supabase.from_("reports").select("*").execute()
+        all_reports = response.data
+
+        # Filter reports based on distance
+        if user_lat is not None and user_lng is not None:
+            filtered_reports = [
+                report for report in all_reports
+                if haversine(user_lat, user_lng, report['latitude'], report['longitude']) <= 1
+            ]
+        else:
+            filtered_reports = all_reports
+
+        return jsonify({'success': True, 'reports': filtered_reports}), 200
+
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 # FILE SAVING COMPONENTS
 def allowed_file(filename):
@@ -183,7 +224,7 @@ def create_report():
             'longitude': float(location_lng) if location_lng else None,
             'image_filename': image_filename
         }).execute()
-
+        
         # The returned response has a 'data' key which is the list of inserted rows
         inserted_data = response.data
 
@@ -192,7 +233,7 @@ def create_report():
             return jsonify({
                 'success': True,
                 'message': 'Report submitted successfully',
-                'report_id': inserted_data[0]['id'] # Access the 'id' from the first item in the list
+                'report_id': inserted_data[0]['id']
             }), 201
         else:
             raise Exception("Supabase insertion failed.")
@@ -202,6 +243,20 @@ def create_report():
             'success': False,
             'message': f'Error submitting report: {str(e)}'
         }), 500
+    
+# Placeholder functions
+def load_reports():
+    """Load reports from JSON file"""
+    try:
+        with open(DATA_FILE, 'r') as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return []
+
+def save_reports(reports):
+    """Save reports to JSON file"""
+    with open(DATA_FILE, 'w') as f:
+        json.dump(reports, f, indent=2)
 
 @app.route('/api/reports', methods=['GET'])
 def get_reports():
@@ -255,147 +310,110 @@ def get_report(report_id):
 
 @app.route('/api/reports/<report_id>/sightings', methods=['POST'])
 def add_sighting(report_id):
-    """Add a sighting click for a report"""
     try:
+        # Get the IP address of the client
         client_ip = get_client_ip()
-        reports = load_reports()
-        report = next((r for r in reports if r['id'] == report_id), None)
-        
-        if not report:
+
+        # Check if the user has already recorded a sighting for this report
+        existing_sighting = supabase.from_("sighting_clicks").select("*").eq("report_id", report_id).eq("client_ip", client_ip).execute().data
+        if existing_sighting:
             return jsonify({
                 'success': False,
-                'message': 'Report not found'
-            }), 404
+                'message': "You've already recorded a sighting for this report."
+            }), 409 # Conflict
+
+        # Increment sightings count in the reports table
+        reports_response = supabase.from_("reports").select("sightings").eq("id", report_id).single().execute()
+        current_sightings = reports_response.data.get("sightings", 0)
         
-        # Initialize sightings structure if it doesn't exist (for backward compatibility)
-        if 'sightings' not in report:
-            report['sightings'] = {'count': 0, 'user_ips': []}
-        
-        # Check if user has already clicked
-        if client_ip in report['sightings']['user_ips']:
-            return jsonify({
-                'success': False,
-                'message': 'You have already reported seeing this issue'
-            }), 400
-        
-        # Add the click
-        report['sightings']['count'] += 1
-        report['sightings']['user_ips'].append(client_ip)
-        report['updated_at'] = datetime.now().isoformat()
-        
-        save_reports(reports)
-        
+        supabase.from_("reports").update({"sightings": current_sightings + 1}).eq("id", report_id).execute()
+
+        # Record the user's sighting in the clicks table
+        supabase.from_("sighting_clicks").insert({
+            'report_id': report_id,
+            'client_ip': client_ip
+        }).execute()
+
         return jsonify({
             'success': True,
-            'message': 'Sighting recorded successfully',
-            'sightings_count': report['sightings']['count']
+            'message': 'Sighting recorded successfully'
         })
-    
+
     except Exception as e:
         return jsonify({
             'success': False,
-            'message': f'Error recording sighting: {str(e)}'
+            'message': f'Error updating sighting: {str(e)}'
         }), 500
 
 @app.route('/api/reports/<report_id>/resolved', methods=['POST'])
 def add_resolved(report_id):
-    """Add a resolved click for a report"""
     try:
+        # Get the IP address of the client
         client_ip = get_client_ip()
-        reports = load_reports()
-        report_index = next((i for i, r in enumerate(reports) if r['id'] == report_id), None)
-        
-        if report_index is None:
+
+        # Check if the user has already recorded a resolved click for this report
+        existing_resolved_click = supabase.from_("resolved_clicks").select("*").eq("report_id", report_id).eq("client_ip", client_ip).execute().data
+        if existing_resolved_click:
             return jsonify({
                 'success': False,
-                'message': 'Report not found'
-            }), 404
+                'message': "You've already recorded this as resolved."
+            }), 409
+
+        # Increment resolved count in the reports table
+        reports_response = supabase.from_("reports").select("resolved").eq("id", report_id).single().execute()
+        current_resolved_count = reports_response.data.get("resolved", 0)
         
-        report = reports[report_index]
-        
-        # Initialize resolved structure if it doesn't exist (for backward compatibility)
-        if 'resolved' not in report:
-            report['resolved'] = {'count': 0, 'user_ips': []}
-        
-        # Check if user has already clicked
-        if client_ip in report['resolved']['user_ips']:
-            return jsonify({
-                'success': False,
-                'message': 'You have already marked this issue as resolved'
-            }), 400
-        
-        # Add the click
-        report['resolved']['count'] += 1
-        report['resolved']['user_ips'].append(client_ip)
-        report['updated_at'] = datetime.now().isoformat()
-        
-        # Check if resolved count reached 10 - delete the report
-        if report['resolved']['count'] >= 10:
-            # Delete associated image file from Supabase Storage
-            image_filename = report.get('image_filename')
-            if image_filename:
-                try:
-                    supabase.storage.from_("reports-images").remove([f"images/{image_filename}"])
-                except Exception as e:
-                    print(f"Error deleting image from Supabase: {e}")
-            
-            # Remove report from list
-            reports.pop(report_index)
-            save_reports(reports)
-            
+        supabase.from_("reports").update({"resolved": current_resolved_count + 1}).eq("id", report_id).execute()
+
+        # Record the user's resolved click
+        supabase.from_("resolved_clicks").insert({
+            'report_id': report_id,
+            'client_ip': client_ip
+        }).execute()
+
+        # If resolved count reaches 5, delete the report
+        reports_response_after = supabase.from_("reports").select("resolved").eq("id", report_id).single().execute()
+        current_resolved_count_after = reports_response_after.data.get("resolved", 0)
+
+        if current_resolved_count_after >= 5:
+            supabase.from_("reports").delete().eq("id", report_id).execute()
             return jsonify({
                 'success': True,
-                'message': 'Report marked as resolved and removed (10 confirmations reached)',
+                'message': "Report marked as resolved and deleted.",
                 'report_deleted': True
             })
-        else:
-            save_reports(reports)
-            return jsonify({
-                'success': True,
-                'message': 'Resolution vote recorded successfully',
-                'resolved_count': report['resolved']['count']
-            })
-    
+
+        return jsonify({
+            'success': True,
+            'message': "Resolved status recorded successfully",
+            'report_deleted': False
+        })
+
     except Exception as e:
         return jsonify({
             'success': False,
-            'message': f'Error recording resolution: {str(e)}'
+            'message': f'Error updating resolved status: {str(e)}'
         }), 500
 
 # For already clicked verification
 @app.route('/api/reports/<report_id>/user-status', methods=['GET'])
-def get_user_report_status(report_id):
-    """Check if current user has already clicked buttons for this report"""
+def get_user_status(report_id):
     try:
         client_ip = get_client_ip()
-        reports = load_reports()
-        report = next((r for r in reports if r['id'] == report_id), None)
-        
-        if not report:
-            return jsonify({
-                'success': False,
-                'message': 'Report not found'
-            }), 404
-        
-        # Initialize structures if they don't exist (backward compatibility)
-        if 'sightings' not in report:
-            report['sightings'] = {'count': 0, 'user_ips': []}
-        if 'resolved' not in report:
-            report['resolved'] = {'count': 0, 'user_ips': []}
-        
-        has_sighting_click = client_ip in report['sightings']['user_ips']
-        has_resolved_click = client_ip in report['resolved']['user_ips']
+
+        has_sighting_click = supabase.from_("sighting_clicks").select("*").eq("report_id", report_id).eq("client_ip", client_ip).execute().data
+        has_resolved_click = supabase.from_("resolved_clicks").select("*").eq("report_id", report_id).eq("client_ip", client_ip).execute().data
         
         return jsonify({
             'success': True,
-            'has_sighting_click': has_sighting_click,
-            'has_resolved_click': has_resolved_click
+            'has_sighting_click': len(has_sighting_click) > 0,
+            'has_resolved_click': len(has_resolved_click) > 0
         })
-    
+
     except Exception as e:
         return jsonify({
             'success': False,
-            'message': f'Error checking user status: {str(e)}'
+            'message': f'Error fetching user status: {str(e)}'
         }), 500
     
 @app.route('/api/reports/<report_id>', methods=['PUT'])
