@@ -1,0 +1,45 @@
+[
+  {
+    "id": "1b5494f1-133a-4771-8a17-1f4f8c5aac7c",
+    "timestamp": "2025-08-27T17:45:21.034983",
+    "issue_type": "custom",
+    "custom_issue": "Test Issue",
+    "description": "This is the description of this custom test issue.",
+    "location": "Road 11, Pasong Malapad, GSIS Hills, Santa Quiteria/Talipapa, District 1, Caloocan, Northern Manila District, Metro Manila, 1402, Philippines",
+    "latitude": 14.6887242,
+    "longitude": 121.0187414,
+    "image_filename": "d83d9303-d0b2-42b0-811e-b856424f6fac.jpg",
+    "status": "pending",
+    "sightings": {
+      "count": 0,
+      "user_ips": []
+    },
+    "resolved": {
+      "count": 0,
+      "user_ips": []
+    }
+  },
+  {
+    "id": "1823ca1d-f0d9-4a98-ab7f-45cfb37daaa7",
+    "timestamp": "2025-08-27T17:57:52.188358",
+    "issue_type": "custom",
+    "custom_issue": "Doggo",
+    "description": "This is Muffet.",
+    "location": "Ro-Den Refilling Gas Station, J. P. Ramoy Street, Pasong Malapad, Barangay 164, Santa Quiteria/Talipapa, District 1, Caloocan, Northern Manila District, Metro Manila, 1402, Philippines",
+    "latitude": 14.688179345393992,
+    "longitude": 121.02000474929811,
+    "image_filename": "4bc1fac6-a4bc-40f7-b617-ecfb3c6dfe34.jpeg",
+    "status": "pending",
+    "sightings": {
+      "count": 1,
+      "user_ips": [
+        "192.168.1.11"
+      ]
+    },
+    "resolved": {
+      "count": 0,
+      "user_ips": []
+    },
+    "updated_at": "2025-08-27T19:36:31.368744"
+  }
+]
