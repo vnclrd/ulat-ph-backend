@@ -137,30 +137,98 @@ def save_location():
         return jsonify({'error': str(e)}), 500
     
 # API endpoint to get all reports from Supabase
-@app.route('/api/reports', methods=['GET'])
-def get_reports():
-    try:
-        # Get latitude and longitude from query parameters
-        user_lat = request.args.get('latitude', type=float)
-        user_lng = request.args.get('longitude', type=float)
+# Change the function to handle both GET and POST requests
+@app.route('/api/reports', methods=['GET', 'POST'])
+def reports_handler():
+    # Handle GET request for fetching reports
+    if request.method == 'GET':
+        try:
+            # Get latitude and longitude from query parameters
+            user_lat = request.args.get('latitude', type=float)
+            user_lng = request.args.get('longitude', type=float)
 
-        # Retrieve all reports from Supabase
-        response = supabase.from_("reports").select("*").execute()
-        all_reports = response.data
+            # Retrieve all reports from Supabase
+            response = supabase.from_("reports").select("*").execute()
+            all_reports = response.data
 
-        # Filter reports based on distance
-        if user_lat is not None and user_lng is not None:
-            filtered_reports = [
-                report for report in all_reports
-                if haversine(user_lat, user_lng, report['latitude'], report['longitude']) <= 1
-            ]
-        else:
-            filtered_reports = all_reports
+            # Filter reports based on distance
+            if user_lat is not None and user_lng is not None:
+                filtered_reports = [
+                    report for report in all_reports
+                    if haversine(user_lat, user_lng, report['latitude'], report['longitude']) <= 1
+                ]
+            else:
+                filtered_reports = all_reports
 
-        return jsonify({'success': True, 'reports': filtered_reports}), 200
+            return jsonify({'success': True, 'reports': filtered_reports}), 200
 
-    except Exception as e:
-        return jsonify({'success': False, 'message': str(e)}), 500
+        except Exception as e:
+            return jsonify({'success': False, 'message': str(e)}), 500
+
+    # Handle POST request for creating a new report
+    elif request.method == 'POST':
+        try:
+            # Handle image upload
+            image_filename = None
+            if 'image' in request.files:
+                file = request.files['image']
+                if file and file.filename != '' and allowed_file(file.filename):
+                    try:
+                        # Generate a unique filename using UUID
+                        file_extension = secure_filename(file.filename).rsplit('.', 1)[1].lower()
+                        image_uuid = str(uuid.uuid4())
+                        image_filename = f"{image_uuid}.{file_extension}"
+                        
+                        # Upload file to Supabase Storage
+                        supabase_upload_path = f"images/{image_filename}"
+                        supabase.storage.from_("reports-images").upload(
+                            file=file.read(),
+                            path=supabase_upload_path,
+                            file_options={"content-type": file.content_type}
+                        )
+                    except Exception as e:
+                        return jsonify({
+                            'success': False,
+                            'message': f'Error uploading image to Supabase: {str(e)}'
+                        }), 500
+
+            # Get form data
+            issue_type = request.form.get('issueType', '')
+            custom_issue = request.form.get('customIssue', '')
+            description = request.form.get('description', '')
+            location_name = request.form.get('location', '')
+            location_lat = request.form.get('latitude', '')
+            location_lng = request.form.get('longitude', '')
+            
+            # Insert data into Supabase table
+            response = supabase.from_("reports").insert({
+                'issue_type': issue_type,
+                'custom_issue': custom_issue if issue_type == 'custom' else None,
+                'description': description,
+                'location_name': location_name,
+                'latitude': float(location_lat) if location_lat else None,
+                'longitude': float(location_lng) if location_lng else None,
+                'image_filename': image_filename
+            }).execute()
+            
+            # The returned response has a 'data' key which is the list of inserted rows
+            inserted_data = response.data
+
+            # Check if insertion was successful
+            if inserted_data:
+                return jsonify({
+                    'success': True,
+                    'message': 'Report submitted successfully',
+                    'report_id': inserted_data[0]['id']
+                }), 201
+            else:
+                raise Exception("Supabase insertion failed.")
+
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'message': f'Error submitting report: {str(e)}'
+            }), 500
 
 # FILE SAVING COMPONENTS
 def allowed_file(filename):
