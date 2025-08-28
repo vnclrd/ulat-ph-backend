@@ -392,8 +392,11 @@ def add_sighting(report_id):
 
         # Increment sightings count in the reports table
         reports_response = supabase.from_("reports").select("sightings").eq("id", report_id).single().execute()
-        current_sightings = reports_response.data.get("sightings", 0)
         
+        # Safely get the value and convert to an integer. If the value is null, it defaults to 0.
+        current_sightings = int(reports_response.data.get("sightings", 0)) if reports_response.data and reports_response.data.get("sightings") is not None else 0
+        
+        # Update sightings count in the reports table
         supabase.from_("reports").update({"sightings": current_sightings + 1}).eq("id", report_id).execute()
 
         # Record the user's sighting in the clicks table
@@ -429,8 +432,11 @@ def add_resolved(report_id):
 
         # Increment resolved count in the reports table
         reports_response = supabase.from_("reports").select("resolved").eq("id", report_id).single().execute()
-        current_resolved_count = reports_response.data.get("resolved", 0)
+
+        # Safely get the value and convert to an integer. If the value is null, it defaults to 0.
+        current_resolved_count = int(reports_response.data.get("resolved", 0)) if reports_response.data and reports_response.data.get("resolved") is not None else 0
         
+        # Update resolved count in the reports table
         supabase.from_("reports").update({"resolved": current_resolved_count + 1}).eq("id", report_id).execute()
 
         # Record the user's resolved click
@@ -439,9 +445,9 @@ def add_resolved(report_id):
             'client_ip': client_ip
         }).execute()
 
-        # If resolved count reaches 5, delete the report
+        # Get the updated resolved count to check if we should delete the report
         reports_response_after = supabase.from_("reports").select("resolved").eq("id", report_id).single().execute()
-        current_resolved_count_after = reports_response_after.data.get("resolved", 0)
+        current_resolved_count_after = int(reports_response_after.data.get("resolved", 0)) if reports_response_after.data and reports_response_after.data.get("resolved") is not None else 0
 
         if current_resolved_count_after >= 5:
             supabase.from_("reports").delete().eq("id", report_id).execute()
