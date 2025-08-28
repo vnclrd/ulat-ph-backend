@@ -380,34 +380,34 @@ def get_report(report_id):
 @app.route('/api/reports/<report_id>/sightings', methods=['POST'])
 def add_sighting(report_id):
     try:
-        # Get the IP address of the client
         client_ip = get_client_ip()
+        data = request.get_json()
+        device_id = data.get("device_id")
 
-        # Get the current sightings JSONB object from the reports table
+        if not device_id:
+            return jsonify({"success": False, "message": "Device ID is required"}), 400
+
+        # Fetch only sightings data
         reports_response = supabase.from_('reports').select('sightings').eq('id', report_id).single().execute()
-        sightings_data = reports_response.data.get('sightings')
+        sightings_data = reports_response.data.get('sightings') or {'count': 0, 'device_ids': [], 'user_ips': []}
 
-        # Initialize data if it's not present or invalid
-        if not isinstance(sightings_data, dict) or 'user_ips' not in sightings_data or 'count' not in sightings_data:
-            sightings_data = {'count': 0, 'user_ips': []}
-
-        # Check if the user has already recorded a sighting for this report
-        if client_ip in sightings_data['user_ips']:
+        # Check if this device has already clicked Sightings
+        if device_id in sightings_data['device_ids'] or client_ip in sightings_data['user_ips']:
             return jsonify({
                 'success': False,
-                'message': "You've already seen this issue."
-            }), 409 # Conflict
+                'message': "You've already marked this sighting."
+            }), 409
 
-        # Increment count and add IP
+        # Update sightings data
         sightings_data['count'] += 1
+        sightings_data['device_ids'].append(device_id)
         sightings_data['user_ips'].append(client_ip)
 
-        # Update sightings JSONB object in the reports table
         supabase.from_('reports').update({'sightings': sightings_data}).eq('id', report_id).execute()
 
         return jsonify({
             'success': True,
-            'message': "You've seen this too. Thank you for your contribution!"
+            'message': "You've marked this as seen. Thank you for your contribution!"
         })
 
     except Exception as e:
@@ -420,32 +420,32 @@ def add_sighting(report_id):
 @app.route('/api/reports/<report_id>/resolved', methods=['POST'])
 def add_resolved(report_id):
     try:
-        # Get the IP address of the client
         client_ip = get_client_ip()
+        data = request.get_json()
+        device_id = data.get("device_id")
 
-        # Get the current resolved JSONB object from the reports table
+        if not device_id:
+            return jsonify({"success": False, "message": "Device ID is required"}), 400
+
+        # Fetch only resolved data
         reports_response = supabase.from_('reports').select('resolved').eq('id', report_id).single().execute()
-        resolved_data = reports_response.data.get('resolved')
-        
-        # Initialize data if it's not present or invalid
-        if not isinstance(resolved_data, dict) or 'user_ips' not in resolved_data or 'count' not in resolved_data:
-            resolved_data = {'count': 0, 'user_ips': []}
+        resolved_data = reports_response.data.get('resolved') or {'count': 0, 'device_ids': [], 'user_ips': []}
 
-        # Check if the user has already recorded a resolved click for this report
-        if client_ip in resolved_data['user_ips']:
+        # Check if this device has already clicked Resolved
+        if device_id in resolved_data['device_ids'] or client_ip in resolved_data['user_ips']:
             return jsonify({
                 'success': False,
-                'message': "You've already said that this was resolved."
+                'message': "You've already marked this as resolved."
             }), 409
-        
-        # Increment count and add IP
+
+        # Update resolved data
         resolved_data['count'] += 1
+        resolved_data['device_ids'].append(device_id)
         resolved_data['user_ips'].append(client_ip)
 
-        # Update resolved JSONB object in the reports table
         supabase.from_('reports').update({'resolved': resolved_data}).eq('id', report_id).execute()
 
-        # Check if the report should be deleted
+        # If resolved count reaches 5, delete the report
         if resolved_data['count'] >= 5:
             supabase.from_('reports').delete().eq('id', report_id).execute()
             return jsonify({
@@ -456,7 +456,7 @@ def add_resolved(report_id):
 
         return jsonify({
             'success': True,
-            'message': "You've said that this was resolved. Thank you for your contribution!",
+            'message': "You've marked this as resolved. Thank you for your contribution!",
             'report_deleted': False
         })
 
@@ -471,14 +471,20 @@ def add_resolved(report_id):
 def get_user_status(report_id):
     try:
         client_ip = get_client_ip()
+        device_id = request.args.get("device_id")
 
-        has_sighting_click = supabase.from_('sighting_clicks').select('*').eq('report_id', report_id).eq('client_ip', client_ip).execute().data
-        has_resolved_click = supabase.from_('resolved_clicks').select('*').eq('report_id', report_id).eq('client_ip', client_ip).execute().data
-        
+        report = supabase.from_('reports').select('sightings, resolved').eq('id', report_id).single().execute().data
+
+        sightings = report.get("sightings", {})
+        resolved = report.get("resolved", {})
+
+        has_sighting_click = device_id in sightings.get('device_ids', []) or client_ip in sightings.get('user_ips', [])
+        has_resolved_click = device_id in resolved.get('device_ids', []) or client_ip in resolved.get('user_ips', [])
+
         return jsonify({
             'success': True,
-            'has_sighting_click': len(has_sighting_click) > 0,
-            'has_resolved_click': len(has_resolved_click) > 0
+            'has_sighting_click': has_sighting_click,
+            'has_resolved_click': has_resolved_click
         })
 
     except Exception as e:
