@@ -153,7 +153,6 @@ def create_report():
                     image_filename = f"{image_uuid}.{file_extension}"
                     
                     # Upload file to Supabase Storage
-                    # The path is inside the 'images' folder within your 'reports-images' bucket
                     supabase_upload_path = f"images/{image_filename}"
                     supabase.storage.from_("reports-images").upload(
                         file=file.read(),
@@ -173,39 +172,27 @@ def create_report():
         location_name = request.form.get('location', '')
         location_lat = request.form.get('latitude', '')
         location_lng = request.form.get('longitude', '')
-
-        # Create report object
-        report = {
-            'id': str(uuid.uuid4()),
-            'timestamp': datetime.now().isoformat(),
+        
+        # Insert data into Supabase table
+        data, count = supabase.from_("reports").insert({
             'issue_type': issue_type,
-            'custom_issue': custom_issue if issue_type == 'custom' else '',
+            'custom_issue': custom_issue if issue_type == 'custom' else None,
             'description': description,
-            'location': location_name,
+            'location_name': location_name,
             'latitude': float(location_lat) if location_lat else None,
             'longitude': float(location_lng) if location_lng else None,
-            'image_filename': image_filename,
-            'status': 'pending',
-            'sightings': {
-                'count': 0,
-                'user_ips': []
-            },
-            'resolved': {
-                'count': 0,
-                'user_ips': []
-            }
-        }
-
-        # Load existing reports and add new one
-        reports = load_reports()
-        reports.append(report)
-        save_reports(reports)
-
-        return jsonify({
-            'success': True,
-            'message': 'Report submitted successfully',
-            'report_id': report['id']
-        }), 201
+            'image_filename': image_filename
+        }).execute()
+        
+        # Check if insertion was successful
+        if data:
+            return jsonify({
+                'success': True,
+                'message': 'Report submitted successfully',
+                'report_id': data[1]['id']
+            }), 201
+        else:
+            raise Exception("Supabase insertion failed.")
 
     except Exception as e:
         return jsonify({
