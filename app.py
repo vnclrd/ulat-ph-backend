@@ -15,17 +15,10 @@ from supabase import create_client, Client
 from PIL import Image
 from io import BytesIO
 
-# For SightEngine
-import requests
-
 # Supabase credentials (you will get these from your Supabase dashboard)
 SUPABASE_URL = os.environ.get('SUPABASE_URL')
 SUPABASE_KEY = os.environ.get('SUPABASE_KEY')
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-# SightEngine for Image Upload Moderation
-SIGHTENGINE_USER = os.environ.get("SIGHTENGINE_USER")
-SIGHTENGINE_SECRET = os.environ.get("SIGHTENGINE_SECRET")
 
 app = Flask(__name__)
 CORS(app, resources={r'/*': {'origins': '*'}}) # resources for testing
@@ -40,20 +33,6 @@ ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
 # Create directories if they don't exist
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs('data', exist_ok=True)
-
-# SightEngine Filter
-def moderate_image(file_bytes, filename):
-    url = 'https://api.sightengine.com/1.0/check.json'
-    files = {'media': (filename, file_bytes)}
-    data = {
-        'models': 'nudity-2.1,weapon,alcohol,recreational_drug,medical,properties,type,quality,offensive-2.0,faces,scam,text-content,face-attributes,gore-2.0,qr-content,tobacco,genai,violence,self-harm,money,gambling',
-        'api_user': SIGHTENGINE_USER,
-        'api_secret': SIGHTENGINE_SECRET
-    }
-
-    r = requests.post(url, files=files, data=data)
-    result = r.json()
-    return result
 
 def get_client_ip():
     '''Get the client's IP address'''
@@ -165,14 +144,18 @@ def save_location():
 # Change the function to handle both GET and POST requests
 @app.route('/api/reports', methods=['GET', 'POST'])
 def reports_handler():
+    # Handle GET request for fetching reports
     if request.method == 'GET':
         try:
+            # Get latitude and longitude from query parameters
             user_lat = request.args.get('latitude', type=float)
             user_lng = request.args.get('longitude', type=float)
 
+            # Retrieve all reports from Supabase
             response = supabase.from_('reports').select('*').execute()
             all_reports = response.data
 
+            # Filter reports based on distance
             if user_lat is not None and user_lng is not None:
                 filtered_reports = [
                     report for report in all_reports
@@ -186,58 +169,24 @@ def reports_handler():
         except Exception as e:
             return jsonify({'success': False, 'message': str(e)}), 500
 
+    # Handle POST request for creating a new report
     elif request.method == 'POST':
         try:
+            # Handle image upload and resizing
             image_filename = None
             if 'image' in request.files:
                 file = request.files['image']
                 if file and file.filename != '' and allowed_file(file.filename):
                     try:
-                        # Read file for moderation
-                        raw_bytes = file.read()
-                        file.seek(0)
-
-                        # 🔍 Run Sightengine moderation
-                        moderation_result = moderate_image(raw_bytes, file.filename)
-                        if moderation_result.get('status') == 'success':
-                            # Decide blocking logic — you can customize this
-                            block = False
-
-                            # Example: block if offensive prob > 0.5
-                            if moderation_result.get('offensive', {}).get('prob', 0) > 0.5:
-                                block = True
-
-                            # Example: block if any gore/violence/self-harm probability is high
-                            if moderation_result.get('violence', {}).get('prob', 0) > 0.5:
-                                block = True
-                            if moderation_result.get('gore', {}).get('prob', 0) > 0.5:
-                                block = True
-                            if moderation_result.get('self-harm', {}).get('prob', 0) > 0.5:
-                                block = True
-
-                            # Example: block if profanity text detected
-                            text_matches = moderation_result.get('text', {}).get('profanity', {}).get('matches', [])
-                            if len(text_matches) > 0:
-                                block = True
-
-                            if block:
-                                return jsonify({
-                                    'success': False,
-                                    'message': 'Image rejected due to inappropriate/profane/unsafe content'
-                                }), 400
-                        else:
-                            return jsonify({
-                                'success': False,
-                                'message': 'Image moderation failed'
-                            }), 500
-
-                        # ✅ If passed, resize and upload
+                        # Process the image to reduce its size
                         resized_image_bytes = resize_image(file)
 
+                        # Generate a unique filename using UUID
                         file_extension = secure_filename(file.filename).rsplit('.', 1)[1].lower()
                         image_uuid = str(uuid.uuid4())
                         image_filename = f'{image_uuid}.{file_extension}'
                         
+                        # Upload the resized image to Supabase Storage
                         supabase_upload_path = f'images/{image_filename}'
                         supabase.storage.from_('reports-images').upload(
                             file=resized_image_bytes.getvalue(),
@@ -250,6 +199,7 @@ def reports_handler():
                             'message': f'Error uploading image to Supabase: {str(e)}'
                         }), 500
 
+            # Get form data
             issue_type = request.form.get('issueType', '')
             custom_issue = request.form.get('customIssue', '')
             description = request.form.get('description', '')
@@ -257,6 +207,7 @@ def reports_handler():
             location_lat = request.form.get('latitude', '')
             location_lng = request.form.get('longitude', '')
             
+            # Insert data into Supabase table
             response = supabase.from_('reports').insert({
                 'issue_type': issue_type,
                 'custom_issue': custom_issue if issue_type == 'custom' else None,
@@ -267,8 +218,10 @@ def reports_handler():
                 'image_filename': image_filename
             }).execute()
             
+            # The returned response has a 'data' key which is the list of inserted rows
             inserted_data = response.data
 
+            # Check if insertion was successful
             if inserted_data:
                 return jsonify({
                     'success': True,
