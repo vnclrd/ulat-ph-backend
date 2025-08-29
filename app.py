@@ -15,24 +15,18 @@ from supabase import create_client, Client
 from PIL import Image
 from io import BytesIO
 
-# Supabase credentials (you will get these from your Supabase dashboard)
+# Supabase credentials
 SUPABASE_URL = os.environ.get('SUPABASE_URL')
 SUPABASE_KEY = os.environ.get('SUPABASE_KEY')
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 app = Flask(__name__)
-CORS(app, resources={r'/*': {'origins': '*'}}) # resources for testing
+CORS(app, resources={r'/*': {'origins': '*'}})
 
 geolocator = Nominatim(user_agent='location_app')
 
-# Configuration for file uploads and data storage
-UPLOAD_FOLDER = 'uploads/images'
-DATA_FILE = 'data/reports.json'
+# Configuration for file uploads
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
-
-# Create directories if they don't exist
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs('data', exist_ok=True)
 
 def get_client_ip():
     '''Get the client's IP address'''
@@ -43,10 +37,7 @@ def get_client_ip():
     return ip
 
 def haversine(lat1, lon1, lat2, lon2):
-    '''
-    Calculate the distance between two points on Earth
-    using the Haversine formula.
-    '''
+    '''Calculate the distance between two points on Earth using the Haversine formula.'''
     R = 6371  # Radius of Earth in kilometers
     lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
     dlon = lon2 - lon1
@@ -56,11 +47,36 @@ def haversine(lat1, lon1, lat2, lon2):
     distance = R * c
     return distance
 
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def resize_image(image_file, size=(800, 600), quality=85):
+    '''Resize image and return BytesIO object'''
+    try:
+        # Reset file pointer to beginning
+        image_file.seek(0)
+        
+        img = Image.open(image_file)
+        
+        # Convert to RGB if necessary (for JPEG compatibility)
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+        
+        img.thumbnail(size, Image.Resampling.LANCZOS)
+        
+        # Save the resized image to a temporary in-memory buffer
+        img_byte_arr = BytesIO()
+        img.save(img_byte_arr, format='JPEG', quality=quality)
+        img_byte_arr.seek(0)
+        
+        return img_byte_arr
+    except Exception as e:
+        raise Exception(f"Image processing error: {str(e)}")
+
 @app.route('/')
 def home():
     return 'Hello, World!'
 
-# Automatic detect current location
 @app.route('/reverse-geocode', methods=['POST'])
 def reverse_geocode():
     data = request.get_json()
@@ -91,7 +107,6 @@ def geocode():
         return jsonify({'error': 'Address is required'}), 400
 
     try:
-        # Use geolocator to find the location details from the address
         location_data = geolocator.geocode(address)
         
         if location_data:
@@ -112,7 +127,6 @@ def geocode():
             'message': f'Geocoding error: {str(e)}'
         }), 500
 
-# Manual entering of location
 @app.route('/save-location', methods=['POST'])
 def save_location():
     data = request.get_json()
@@ -123,7 +137,6 @@ def save_location():
         return jsonify({'error': 'Location is required'}), 400
 
     try:
-        # Get coordinates from location name
         location = geolocator.geocode(location_name)
         if not location:
             return jsonify({'error': 'Invalid location'}), 400
@@ -139,146 +152,85 @@ def save_location():
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-    
-# API endpoint to get all reports from Supabase
-# Change the function to handle both GET and POST requests
-@app.route('/api/reports', methods=['GET', 'POST'])
-def reports_handler():
-    # Handle GET request for fetching reports
-    if request.method == 'GET':
-        try:
-            # Get latitude and longitude from query parameters
-            user_lat = request.args.get('latitude', type=float)
-            user_lng = request.args.get('longitude', type=float)
 
-            # Retrieve all reports from Supabase
-            response = supabase.from_('reports').select('*').execute()
-            all_reports = response.data
-
-            # Filter reports based on distance
-            if user_lat is not None and user_lng is not None:
-                filtered_reports = [
-                    report for report in all_reports
-                    if haversine(user_lat, user_lng, report['latitude'], report['longitude']) <= 1
-                ]
-            else:
-                filtered_reports = all_reports
-
-            return jsonify({'success': True, 'reports': filtered_reports}), 200
-
-        except Exception as e:
-            return jsonify({'success': False, 'message': str(e)}), 500
-
-    # Handle POST request for creating a new report
-    elif request.method == 'POST':
-        try:
-            # Handle image upload and resizing
-            image_filename = None
-            if 'image' in request.files:
-                file = request.files['image']
-                if file and file.filename != '' and allowed_file(file.filename):
-                    try:
-                        # Process the image to reduce its size
-                        resized_image_bytes = resize_image(file)
-
-                        # Generate a unique filename using UUID
-                        file_extension = secure_filename(file.filename).rsplit('.', 1)[1].lower()
-                        image_uuid = str(uuid.uuid4())
-                        image_filename = f'{image_uuid}.{file_extension}'
-                        
-                        # Upload the resized image to Supabase Storage
-                        supabase_upload_path = f'images/{image_filename}'
-                        supabase.storage.from_('reports-images').upload(
-                            file=resized_image_bytes.getvalue(),
-                            path=supabase_upload_path,
-                            file_options={'content-type': file.content_type}
-                        )
-                    except Exception as e:
-                        return jsonify({
-                            'success': False,
-                            'message': f'Error uploading image to Supabase: {str(e)}'
-                        }), 500
-
-            # Get form data
-            issue_type = request.form.get('issueType', '')
-            custom_issue = request.form.get('customIssue', '')
-            description = request.form.get('description', '')
-            location_name = request.form.get('location', '')
-            location_lat = request.form.get('latitude', '')
-            location_lng = request.form.get('longitude', '')
-            
-            # Insert data into Supabase table
-            response = supabase.from_('reports').insert({
-                'issue_type': issue_type,
-                'custom_issue': custom_issue if issue_type == 'custom' else None,
-                'description': description,
-                'location_name': location_name,
-                'latitude': float(location_lat) if location_lat else None,
-                'longitude': float(location_lng) if location_lng else None,
-                'image_filename': image_filename
-            }).execute()
-            
-            # The returned response has a 'data' key which is the list of inserted rows
-            inserted_data = response.data
-
-            # Check if insertion was successful
-            if inserted_data:
-                return jsonify({
-                    'success': True,
-                    'message': 'Report submitted successfully',
-                    'report_id': inserted_data[0]['id']
-                }), 201
-            else:
-                raise Exception('Supabase insertion failed.')
-
-        except Exception as e:
-            return jsonify({
-                'success': False,
-                'message': f'Error submitting report: {str(e)}'
-            }), 500
-
-# FILE SAVING COMPONENTS
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
-
-def load_reports():
-    '''Load reports from JSON file'''
+@app.route('/api/reports', methods=['GET'])
+def get_reports():
+    '''Get all reports with optional filtering by location'''
     try:
-        with open(DATA_FILE, 'r') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return []
+        # Get latitude and longitude from query parameters
+        user_lat = request.args.get('latitude', type=float)
+        user_lng = request.args.get('longitude', type=float)
 
-def save_reports(reports):
-    '''Save reports to JSON file'''
-    with open(DATA_FILE, 'w') as f:
-        json.dump(reports, f, indent=2)
+        # Retrieve all reports from Supabase
+        response = supabase.from_('reports').select('*').execute()
+        
+        if not response.data:
+            return jsonify({'success': True, 'reports': []}), 200
+            
+        all_reports = response.data
+
+        # Filter reports based on distance (within 1km)
+        if user_lat is not None and user_lng is not None:
+            filtered_reports = []
+            for report in all_reports:
+                if (report.get('latitude') is not None and 
+                    report.get('longitude') is not None):
+                    distance = haversine(user_lat, user_lng, 
+                                       report['latitude'], report['longitude'])
+                    if distance <= 1:  # Within 1km
+                        filtered_reports.append(report)
+            reports = filtered_reports
+        else:
+            reports = all_reports
+
+        # Sort by creation time (newest first)
+        reports.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+
+        return jsonify({'success': True, 'reports': reports}), 200
+
+    except Exception as e:
+        print(f"Error fetching reports: {str(e)}", flush=True)
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/api/reports', methods=['POST'])
 def create_report():
+    '''Create a new report'''
     try:
-        # Handle image upload
+        print("Starting report creation...", flush=True)
+        
+        # Handle image upload and resizing
         image_filename = None
         if 'image' in request.files:
             file = request.files['image']
             if file and file.filename != '' and allowed_file(file.filename):
                 try:
-                    # Generate a unique filename using UUID
+                    print("Processing image...", flush=True)
+                    
+                    # Process and resize the image
+                    resized_image_bytes = resize_image(file)
+
+                    # Generate a unique filename
                     file_extension = secure_filename(file.filename).rsplit('.', 1)[1].lower()
                     image_uuid = str(uuid.uuid4())
                     image_filename = f'{image_uuid}.{file_extension}'
                     
-                    # Upload file to Supabase Storage
+                    print(f"Uploading image: {image_filename}", flush=True)
+                    
+                    # Upload the resized image to Supabase Storage
                     supabase_upload_path = f'images/{image_filename}'
-                    supabase.storage.from_('reports-images').upload(
-                        file=file.read(),
+                    upload_response = supabase.storage.from_('reports-images').upload(
+                        file=resized_image_bytes.getvalue(),
                         path=supabase_upload_path,
-                        file_options={'content-type': file.content_type}
+                        file_options={'content-type': 'image/jpeg'}
                     )
+                    
+                    print("Image uploaded successfully", flush=True)
+                    
                 except Exception as e:
+                    print(f"Image upload error: {str(e)}", flush=True)
                     return jsonify({
                         'success': False,
-                        'message': f'Error uploading image to Supabase: {str(e)}'
+                        'message': f'Error uploading image: {str(e)}'
                     }), 500
 
         # Get form data
@@ -289,105 +241,67 @@ def create_report():
         location_lat = request.form.get('latitude', '')
         location_lng = request.form.get('longitude', '')
         
-        # Insert data into Supabase table
-        response = supabase.from_('reports').insert({
+        print(f"Form data received: {issue_type}, {location_name}", flush=True)
+        
+        # Validate required fields
+        if not issue_type or not location_name or not location_lat or not location_lng:
+            return jsonify({
+                'success': False,
+                'message': 'Missing required fields'
+            }), 400
+        
+        # Prepare data for insertion
+        report_data = {
             'issue_type': issue_type,
             'custom_issue': custom_issue if issue_type == 'custom' else None,
             'description': description,
             'location_name': location_name,
-            'latitude': float(location_lat) if location_lat else None,
-            'longitude': float(location_lng) if location_lng else None,
-            'image_filename': image_filename
-        }).execute()
+            'latitude': float(location_lat),
+            'longitude': float(location_lng),
+            'image_filename': image_filename,
+            'sightings': {'count': 0, 'user_ips': []},
+            'resolved': {'count': 0, 'user_ips': []}
+        }
         
-        # The returned response has a 'data' key which is the list of inserted rows
-        inserted_data = response.data
-
+        print("Inserting into Supabase...", flush=True)
+        
+        # Insert data into Supabase table
+        response = supabase.from_('reports').insert(report_data).execute()
+        
         # Check if insertion was successful
-        if inserted_data:
+        if response.data and len(response.data) > 0:
+            print("Report created successfully", flush=True)
             return jsonify({
                 'success': True,
                 'message': 'Report submitted successfully',
-                'report_id': inserted_data[0]['id']
+                'report_id': response.data[0]['id']
             }), 201
         else:
-            raise Exception('Supabase insertion failed.')
+            raise Exception('Supabase insertion failed - no data returned')
 
     except Exception as e:
+        print(f"Error creating report: {str(e)}", flush=True)
         return jsonify({
             'success': False,
             'message': f'Error submitting report: {str(e)}'
-        }), 500
-    
-# Image file size reducer
-def resize_image(image_file, size=(800, 600), quality=85):
-    img = Image.open(image_file)
-    img.thumbnail(size, Image.Resampling.LANCZOS)
-    
-    # Save the resized image to a temporary in-memory buffer
-    img_byte_arr = BytesIO()
-    img.save(img_byte_arr, format=img.format, quality=quality)
-    img_byte_arr.seek(0)
-    
-    return img_byte_arr
-    
-# Placeholder functions
-def load_reports():
-    '''Load reports from JSON file'''
-    try:
-        with open(DATA_FILE, 'r') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return []
-
-def save_reports(reports):
-    '''Save reports to JSON file'''
-    with open(DATA_FILE, 'w') as f:
-        json.dump(reports, f, indent=2)
-
-@app.route('/api/reports', methods=['GET'])
-def get_reports():
-    '''Get all reports with optional filtering'''
-    try:
-        reports = load_reports()
-        
-        # Optional filtering by status
-        status_filter = request.args.get('status')
-        if status_filter:
-            reports = [r for r in reports if r.get('status') == status_filter]
-        
-        # Sort by timestamp (newest first)
-        reports.sort(key=lambda x: x['timestamp'], reverse=True)
-        
-        return jsonify({
-            'success': True,
-            'reports': reports,
-            'total': len(reports)
-        })
-    
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'message': f'Error fetching reports: {str(e)}'
         }), 500
 
 @app.route('/api/reports/<report_id>', methods=['GET'])
 def get_report(report_id):
     '''Get a specific report by ID'''
     try:
-        reports = load_reports()
-        report = next((r for r in reports if r['id'] == report_id), None)
+        response = supabase.from_('reports').select('*').eq('id', report_id).single().execute()
         
-        if not report:
+        if response.data:
+            return jsonify({
+                'success': True,
+                'report': response.data
+            })
+        else:
             return jsonify({
                 'success': False,
                 'message': 'Report not found'
             }), 404
-        
-        return jsonify({
-            'success': True,
-            'report': report
-        })
     
     except Exception as e:
         return jsonify({
@@ -395,33 +309,37 @@ def get_report(report_id):
             'message': f'Error fetching report: {str(e)}'
         }), 500
 
-# Update sighting count and add entry to sighting_clicks table
 @app.route('/api/reports/<report_id>/sightings', methods=['POST'])
 def add_sighting(report_id):
+    '''Add a sighting to a report'''
     try:
-        # Get the IP address of the client
         client_ip = get_client_ip()
 
-        # Get the current sightings JSONB object from the reports table
+        # Get the current report
         reports_response = supabase.from_('reports').select('sightings').eq('id', report_id).single().execute()
+        
+        if not reports_response.data:
+            return jsonify({'success': False, 'message': 'Report not found'}), 404
+            
         sightings_data = reports_response.data.get('sightings')
 
-        # Initialize data if it's not present or invalid
-        if not isinstance(sightings_data, dict) or 'user_ips' not in sightings_data or 'count' not in sightings_data:
+        # Initialize data if not present
+        if not isinstance(sightings_data, dict):
             sightings_data = {'count': 0, 'user_ips': []}
 
-        # Check if the user has already recorded a sighting for this report
-        if client_ip in sightings_data['user_ips']:
+        # Check if user already reported sighting
+        if client_ip in sightings_data.get('user_ips', []):
             return jsonify({
                 'success': False,
                 'message': "You've already seen this issue."
-            }), 409 # Conflict
+            }), 409
 
-        # Increment count and add IP
-        sightings_data['count'] += 1
+        # Update sightings
+        sightings_data['count'] = sightings_data.get('count', 0) + 1
+        sightings_data['user_ips'] = sightings_data.get('user_ips', [])
         sightings_data['user_ips'].append(client_ip)
 
-        # Update sightings JSONB object in the reports table
+        # Update in database
         supabase.from_('reports').update({'sightings': sightings_data}).eq('id', report_id).execute()
 
         return jsonify({
@@ -435,38 +353,55 @@ def add_sighting(report_id):
             'message': f'Error updating sighting: {str(e)}'
         }), 500
 
-# Update resolved status and add entry to resolved_clicks table
 @app.route('/api/reports/<report_id>/resolved', methods=['POST'])
 def add_resolved(report_id):
+    '''Mark a report as resolved'''
     try:
-        # Get the IP address of the client
         client_ip = get_client_ip()
 
-        # Get the current resolved JSONB object from the reports table
+        # Get the current report
         reports_response = supabase.from_('reports').select('resolved').eq('id', report_id).single().execute()
+        
+        if not reports_response.data:
+            return jsonify({'success': False, 'message': 'Report not found'}), 404
+            
         resolved_data = reports_response.data.get('resolved')
         
-        # Initialize data if it's not present or invalid
-        if not isinstance(resolved_data, dict) or 'user_ips' not in resolved_data or 'count' not in resolved_data:
+        # Initialize data if not present
+        if not isinstance(resolved_data, dict):
             resolved_data = {'count': 0, 'user_ips': []}
 
-        # Check if the user has already recorded a resolved click for this report
-        if client_ip in resolved_data['user_ips']:
+        # Check if user already marked as resolved
+        if client_ip in resolved_data.get('user_ips', []):
             return jsonify({
                 'success': False,
                 'message': "You've already said that this was resolved."
             }), 409
         
-        # Increment count and add IP
-        resolved_data['count'] += 1
+        # Update resolved status
+        resolved_data['count'] = resolved_data.get('count', 0) + 1
+        resolved_data['user_ips'] = resolved_data.get('user_ips', [])
         resolved_data['user_ips'].append(client_ip)
 
-        # Update resolved JSONB object in the reports table
+        # Update in database
         supabase.from_('reports').update({'resolved': resolved_data}).eq('id', report_id).execute()
 
-        # Check if the report should be deleted
+        # Check if report should be deleted (5 or more resolved votes)
         if resolved_data['count'] >= 5:
+            # Get image filename before deletion
+            report_response = supabase.from_('reports').select('image_filename').eq('id', report_id).single().execute()
+            image_filename = report_response.data.get('image_filename') if report_response.data else None
+            
+            # Delete the report
             supabase.from_('reports').delete().eq('id', report_id).execute()
+            
+            # Clean up image if it exists
+            if image_filename:
+                try:
+                    supabase.storage.from_('reports-images').remove([f'images/{image_filename}'])
+                except Exception as img_error:
+                    print(f'Error deleting image: {img_error}', flush=True)
+            
             return jsonify({
                 'success': True,
                 'message': 'Report marked as resolved and deleted.',
@@ -485,19 +420,29 @@ def add_resolved(report_id):
             'message': f'Error updating resolved status: {str(e)}'
         }), 500
 
-# For already clicked verification
 @app.route('/api/reports/<report_id>/user-status', methods=['GET'])
 def get_user_status(report_id):
+    '''Check if user has already interacted with this report'''
     try:
         client_ip = get_client_ip()
 
-        has_sighting_click = supabase.from_('sighting_clicks').select('*').eq('report_id', report_id).eq('client_ip', client_ip).execute().data
-        has_resolved_click = supabase.from_('resolved_clicks').select('*').eq('report_id', report_id).eq('client_ip', client_ip).execute().data
+        # Get the report to check sightings and resolved data
+        response = supabase.from_('reports').select('sightings, resolved').eq('id', report_id).single().execute()
+        
+        if not response.data:
+            return jsonify({'success': False, 'message': 'Report not found'}), 404
+        
+        report_data = response.data
+        sightings_data = report_data.get('sightings', {})
+        resolved_data = report_data.get('resolved', {})
+        
+        has_sighting_click = client_ip in sightings_data.get('user_ips', [])
+        has_resolved_click = client_ip in resolved_data.get('user_ips', [])
         
         return jsonify({
             'success': True,
-            'has_sighting_click': len(has_sighting_click) > 0,
-            'has_resolved_click': len(has_resolved_click) > 0
+            'has_sighting_click': has_sighting_click,
+            'has_resolved_click': has_resolved_click
         })
 
     except Exception as e:
@@ -505,68 +450,31 @@ def get_user_status(report_id):
             'success': False,
             'message': f'Error fetching user status: {str(e)}'
         }), 500
-    
-@app.route('/api/reports/<report_id>', methods=['PUT'])
-def update_report_status(report_id):
-    '''Update report status'''
-    try:
-        data = request.get_json()
-        new_status = data.get('status')
-        
-        if new_status not in ['pending', 'in_progress', 'resolved']:
-            return jsonify({
-                'success': False,
-                'message': 'Invalid status'
-            }), 400
-        
-        reports = load_reports()
-        report = next((r for r in reports if r['id'] == report_id), None)
-        
-        if not report:
-            return jsonify({
-                'success': False,
-                'message': 'Report not found'
-            }), 404
-        
-        report['status'] = new_status
-        report['updated_at'] = datetime.now().isoformat()
-        save_reports(reports)
-        
-        return jsonify({
-            'success': True,
-            'message': 'Report status updated successfully'
-        })
-    
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'message': f'Error updating report: {str(e)}'
-        }), 500
 
 @app.route('/api/reports/<report_id>', methods=['DELETE'])
 def delete_report(report_id):
     '''Delete a report'''
     try:
-        reports = load_reports()
-        report = next((r for r in reports if r['id'] == report_id), None)
+        # Get the report to find associated image
+        response = supabase.from_('reports').select('image_filename').eq('id', report_id).single().execute()
         
-        if not report:
+        if not response.data:
             return jsonify({
                 'success': False,
                 'message': 'Report not found'
             }), 404
         
-        # Delete associated image file from Supabase Storage
-        image_filename = report.get('image_filename')
+        image_filename = response.data.get('image_filename')
+        
+        # Delete the report from database
+        delete_response = supabase.from_('reports').delete().eq('id', report_id).execute()
+        
+        # Delete associated image file from Supabase Storage if it exists
         if image_filename:
             try:
                 supabase.storage.from_('reports-images').remove([f'images/{image_filename}'])
             except Exception as e:
-                print(f'Error deleting image from Supabase: {e}')
-        
-        # Remove report from list
-        reports = [r for r in reports if r['id'] != report_id]
-        save_reports(reports)
+                print(f'Error deleting image from Supabase: {e}', flush=True)
         
         return jsonify({
             'success': True,
