@@ -1,6 +1,7 @@
 Flask
 Flask-Cors
 geopy
+Pillow
 python-dotenv
 supabase
 werkzeug
