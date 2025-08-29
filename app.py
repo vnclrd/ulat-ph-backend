@@ -46,14 +46,17 @@ def moderate_image(file_bytes, filename):
     url = 'https://api.sightengine.com/1.0/check.json'
     files = {'media': (filename, file_bytes)}
     data = {
-        'models': 'nudity-2.1,weapon,alcohol,recreational_drug,medical,properties,type,quality,offensive-2.0,faces,scam,text-content,face-attributes,gore-2.0,qr-content,tobacco,genai,violence,self-harm,money,gambling',
+        'models': 'nudity-2.1,weapon,alcohol,recreational_drug,medical,properties,type,quality,offensive-2.0,faces,scam,text-content,face-attributes,gore-2.0,text,qr-content,tobacco,genai,violence,self-harm,money,gambling',
         'api_user': SIGHTENGINE_USER,
         'api_secret': SIGHTENGINE_SECRET
     }
-
-    r = requests.post(url, files=files, data=data)
-    result = r.json()
-    return result
+    try:
+        r = requests.post(url, files=files, data=data, timeout=10)  # ⏱️ add timeout
+        r.raise_for_status()
+        return r.json()
+    except requests.exceptions.RequestException as e:
+        print("Sightengine error:", str(e), flush=True)
+        return {"status": "failure", "error": str(e)}
 
 def get_client_ip():
     '''Get the client's IP address'''
