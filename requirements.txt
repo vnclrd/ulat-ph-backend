@@ -6,3 +6,4 @@ python-dotenv
 supabase
 werkzeug
 gunicorn
+requests
