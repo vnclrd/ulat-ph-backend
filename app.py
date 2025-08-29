@@ -11,6 +11,10 @@ from datetime import datetime
 from werkzeug.utils import secure_filename
 from supabase import create_client, Client
 
+# Imports for image size reducer
+from PIL import Image
+from io import BytesIO
+
 # Supabase credentials (you will get these from your Supabase dashboard)
 SUPABASE_URL = os.environ.get('SUPABASE_URL')
 SUPABASE_KEY = os.environ.get('SUPABASE_KEY')
@@ -168,21 +172,24 @@ def reports_handler():
     # Handle POST request for creating a new report
     elif request.method == 'POST':
         try:
-            # Handle image upload
+            # Handle image upload and resizing
             image_filename = None
             if 'image' in request.files:
                 file = request.files['image']
                 if file and file.filename != '' and allowed_file(file.filename):
                     try:
+                        # Process the image to reduce its size
+                        resized_image_bytes = resize_image(file)
+
                         # Generate a unique filename using UUID
                         file_extension = secure_filename(file.filename).rsplit('.', 1)[1].lower()
                         image_uuid = str(uuid.uuid4())
                         image_filename = f'{image_uuid}.{file_extension}'
                         
-                        # Upload file to Supabase Storage
+                        # Upload the resized image to Supabase Storage
                         supabase_upload_path = f'images/{image_filename}'
                         supabase.storage.from_('reports-images').upload(
-                            file=file.read(),
+                            file=resized_image_bytes.getvalue(),
                             path=supabase_upload_path,
                             file_options={'content-type': file.content_type}
                         )
@@ -311,6 +318,18 @@ def create_report():
             'success': False,
             'message': f'Error submitting report: {str(e)}'
         }), 500
+    
+# Image file size reducer
+def resize_image(image_file, size=(800, 600), quality=85):
+    img = Image.open(image_file)
+    img.thumbnail(size, Image.Resampling.LANCZOS)
+    
+    # Save the resized image to a temporary in-memory buffer
+    img_byte_arr = BytesIO()
+    img.save(img_byte_arr, format=img.format, quality=quality)
+    img_byte_arr.seek(0)
+    
+    return img_byte_arr
     
 # Placeholder functions
 def load_reports():
