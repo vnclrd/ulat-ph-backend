@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from geopy.geocoders import Nominatim
+from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
 from math import radians, sin, cos, sqrt, atan2
 
 # Imports for file and information saving
@@ -85,17 +86,32 @@ def reverse_geocode():
 
     if latitude is None or longitude is None:
         return jsonify({'error': 'Latitude and longitude are required'}), 400
+    
+    # Add a check to ensure latitude and longitude are valid numbers
+    try:
+        latitude = float(latitude)
+        longitude = float(longitude)
+    except (ValueError, TypeError):
+        return jsonify({'error': 'Invalid latitude or longitude format'}), 400
 
     try:
-        location = geolocator.reverse((latitude, longitude), language='en')
+        # Add a timeout to the geolocator call
+        location = geolocator.reverse((latitude, longitude), language='en', timeout=10)
+        
         if not location:
-            return jsonify({'error': 'Unable to get address'}), 400
+            return jsonify({'error': 'Unable to find an address for these coordinates'}), 404
 
         address = location.address
         return jsonify({'address': address}), 200
 
+    except GeocoderTimedOut:
+        return jsonify({'error': 'Geocoding service timed out. Please try again later.'}), 503
+    except GeocoderUnavailable:
+        return jsonify({'error': 'Geocoding service is unavailable. Please try again later.'}), 503
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        # For any other unexpected errors
+        print(f"Error during reverse geocoding: {str(e)}", flush=True)
+        return jsonify({'error': 'An unexpected error occurred on the server.'}), 500
     
 @app.route('/geocode', methods=['POST'])
 def geocode():
