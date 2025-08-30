@@ -202,7 +202,7 @@ def add_resolved(report_id):
     if error:
         return jsonify({'success': False, 'message': error}), 409 if error == 'Already marked' else 404
 
-    if counter['count'] >= 2:
+    if counter['count'] >= 5:
         report_response = supabase.from_('reports').select('image_filename').eq('id', report_id).single().execute()
         image_filename = report_response.data.get('image_filename') if report_response.data else None
         supabase.from_('reports').delete().eq('id', report_id).execute()
