@@ -87,7 +87,6 @@ def reverse_geocode():
     if latitude is None or longitude is None:
         return jsonify({'error': 'Latitude and longitude are required'}), 400
     
-    # Add a check to ensure latitude and longitude are valid numbers
     try:
         latitude = float(latitude)
         longitude = float(longitude)
@@ -95,23 +94,47 @@ def reverse_geocode():
         return jsonify({'error': 'Invalid latitude or longitude format'}), 400
 
     try:
-        # Add a timeout to the geolocator call
-        location = geolocator.reverse((latitude, longitude), language='en', timeout=10)
+        # Add delay to respect rate limits
+        import time
+        time.sleep(1)
+        
+        # Create a new geolocator instance with more specific user agent
+        geolocator_specific = Nominatim(
+            user_agent='ulat_ph_app_v1.0',
+            timeout=15  # Increase timeout
+        )
+        
+        location = geolocator_specific.reverse(
+            (latitude, longitude), 
+            language='en',
+            exactly_one=True
+        )
         
         if not location:
-            return jsonify({'error': 'Unable to find an address for these coordinates'}), 404
+            return jsonify({
+                'error': 'Unable to find an address for these coordinates',
+                'fallback_address': f'{latitude:.4f}, {longitude:.4f}'
+            }), 404
 
         address = location.address
         return jsonify({'address': address}), 200
 
     except GeocoderTimedOut:
-        return jsonify({'error': 'Geocoding service timed out. Please try again later.'}), 503
+        return jsonify({
+            'error': 'Geocoding service timed out',
+            'fallback_address': f'{latitude:.4f}, {longitude:.4f}'
+        }), 503
     except GeocoderUnavailable:
-        return jsonify({'error': 'Geocoding service is unavailable. Please try again later.'}), 503
+        return jsonify({
+            'error': 'Geocoding service is unavailable',
+            'fallback_address': f'{latitude:.4f}, {longitude:.4f}'
+        }), 503
     except Exception as e:
-        # For any other unexpected errors
         print(f"Error during reverse geocoding: {str(e)}", flush=True)
-        return jsonify({'error': 'An unexpected error occurred on the server.'}), 500
+        return jsonify({
+            'error': 'Geocoding service error',
+            'fallback_address': f'{latitude:.4f}, {longitude:.4f}'
+        }), 503
     
 @app.route('/geocode', methods=['POST'])
 def geocode():
