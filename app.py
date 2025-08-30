@@ -21,9 +21,6 @@ g_eolocator = Nominatim(user_agent='ulat_ph_app_v1.0', timeout=15)
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
 
 # ============================== UTILITY FUNCTIONS ==============================
-def get_client_ip():
-    return request.headers.getlist('X-Forwarded-For')[0] if request.headers.getlist('X-Forwarded-For') else request.remote_addr
-
 def haversine(lat1, lon1, lat2, lon2):
     R = 6371
     lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
@@ -55,17 +52,14 @@ def delete_image_from_storage(image_filename):
     except Exception as e:
         print(f"Error deleting image: {e}", flush=True)
 
-def update_report_counter(report_id, field, client_ip):
+def update_report_counter(report_id, field):
     response = supabase.from_('reports').select(field).eq('id', report_id).single().execute()
     if not response.data:
         return None, 'Report not found'
 
-    counter = response.data.get(field, {'count': 0, 'user_ips': []})
-    if client_ip in counter['user_ips']:
-        return None, 'Already marked'
+    counter = response.data.get(field, {'count': 0})
+    counter['count'] = counter.get('count', 0) + 1  # ✅ Increment count
 
-    counter['count'] += 1
-    counter['user_ips'].append(client_ip)
     supabase.from_('reports').update({field: counter}).eq('id', report_id).execute()
     return counter, None
 
@@ -172,8 +166,8 @@ def create_report():
             'latitude': float(location_lat),
             'longitude': float(location_lng),
             'image_filename': image_filename,
-            'sightings': {'count': 0, 'user_ips': []},
-            'resolved': {'count': 0, 'user_ips': []}
+            'sightings': {'count': 0},
+            'resolved': {'count': 0}
         }
 
         response = supabase.from_('reports').insert(report_data).execute()
@@ -197,20 +191,18 @@ def get_report(report_id):
 
 @app.route('/api/reports/<report_id>/sightings', methods=['POST'])
 def add_sighting(report_id):
-    client_ip = get_client_ip()
-    counter, error = update_report_counter(report_id, 'sightings', client_ip)
+    counter, error = update_report_counter(report_id, 'sightings')
     if error:
         return jsonify({'success': False, 'message': error}), 409 if error == 'Already marked' else 404
     return jsonify({'success': True, 'message': "You've seen this too. Thank you!"})
 
 @app.route('/api/reports/<report_id>/resolved', methods=['POST'])
 def add_resolved(report_id):
-    client_ip = get_client_ip()
-    counter, error = update_report_counter(report_id, 'resolved', client_ip)
+    counter, error = update_report_counter(report_id, 'resolved')
     if error:
         return jsonify({'success': False, 'message': error}), 409 if error == 'Already marked' else 404
 
-    if counter['count'] >= 5:
+    if counter['count'] >= 2:
         report_response = supabase.from_('reports').select('image_filename').eq('id', report_id).single().execute()
         image_filename = report_response.data.get('image_filename') if report_response.data else None
         supabase.from_('reports').delete().eq('id', report_id).execute()
@@ -223,7 +215,6 @@ def add_resolved(report_id):
 @app.route('/api/reports/<report_id>/user-status', methods=['GET'])
 def get_user_status(report_id):
     try:
-        client_ip = get_client_ip()
         response = supabase.from_('reports').select('sightings, resolved').eq('id', report_id).single().execute()
         if not response.data:
             return jsonify({'success': False, 'message': 'Report not found'}), 404
@@ -231,9 +222,7 @@ def get_user_status(report_id):
         sightings = response.data.get('sightings', {})
         resolved = response.data.get('resolved', {})
         return jsonify({
-            'success': True,
-            'has_sighting_click': client_ip in sightings.get('user_ips', []),
-            'has_resolved_click': client_ip in resolved.get('user_ips', [])
+            'success': True
         })
     except Exception as e:
         return jsonify({'success': False, 'message': f'Error fetching user status: {str(e)}'}), 500
