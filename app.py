@@ -6,6 +6,8 @@ from math import radians, sin, cos, sqrt, atan2
 from supabase import create_client, Client
 from PIL import Image
 from io import BytesIO
+from functools import lru_cache
+import requests
 import os
 import uuid
 
@@ -68,6 +70,50 @@ def update_report_counter(report_id, field):
 def home():
     return 'Hello, World!'
 
+# ============================== GEOCODING HELPER ==============================
+@lru_cache(maxsize=500)
+def fetch_geocode(address: str):
+    """
+    Tries Open-Meteo Geocoding first (free, no API key, generous rate limits).
+    Falls back to Nominatim with a proper contact header if needed.
+    """
+    clean_addr = address.strip()
+    
+    # 1. Primary: Open-Meteo Geocoding
+    try:
+        url = "https://geocoding-api.open-meteo.com/v1/search"
+        params = {"name": clean_addr, "count": 1, "language": "en", "format": "json"}
+        res = requests.get(url, params=params, timeout=5)
+        if res.status_code == 200:
+            results = res.json().get("results")
+            if results and len(results) > 0:
+                top = results[0]
+                name_parts = [top.get("name"), top.get("admin1"), top.get("country")]
+                display_name = ", ".join([p for p in name_parts if p])
+                return {
+                    "location_name": display_name,
+                    "latitude": top.get("latitude"),
+                    "longitude": top.get("longitude")
+                }
+    except Exception as err:
+        print(f"Open-Meteo geocoding error: {err}", flush=True)
+
+    # 2. Fallback: Nominatim with contact email in User-Agent
+    try:
+        # Nominatim requires a valid contact email or website in the User-Agent:
+        geolocator = Nominatim(user_agent="UlatPH_App_v1.0_contact_github_vnclrd", timeout=10)
+        location = geolocator.geocode(clean_addr)
+        if location:
+            return {
+                "location_name": location.address,
+                "latitude": location.latitude,
+                "longitude": location.longitude
+            }
+    except Exception as err:
+        print(f"Nominatim fallback error: {err}", flush=True)
+
+    return None
+
 # ------------------------------ Geocoding ------------------------------
 @app.route('/reverse-geocode', methods=['POST'])
 def reverse_geocode():
@@ -97,22 +143,25 @@ def reverse_geocode():
 
 @app.route('/geocode', methods=['POST'])
 def geocode():
-    data = request.get_json()
+    data = request.get_json() or {}
     address = data.get('address')
     if not address:
         return jsonify({'error': 'Address is required'}), 400
 
     try:
-        location_data = g_eolocator.geocode(address)
-        if location_data:
+        location = fetch_geocode(address)
+        if location:
             return jsonify({
                 'success': True,
-                'location_name': location_data.address,
-                'latitude': location_data.latitude,
-                'longitude': location_data.longitude
-            })
+                'location_name': location['location_name'],
+                'latitude': location['latitude'],
+                'longitude': location['longitude']
+            }), 200
+            
         return jsonify({'success': False, 'message': 'Location not found'}), 404
+
     except Exception as e:
+        print(f"Geocoding exception: {str(e)}", flush=True)
         return jsonify({'success': False, 'message': f'Geocoding error: {str(e)}'}), 500
 
 # ------------------------------ Reports ------------------------------

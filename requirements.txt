@@ -5,4 +5,5 @@ Pillow
 python-dotenv
 supabase
 werkzeug
+requests
 gunicorn
