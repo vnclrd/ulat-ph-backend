@@ -1,16 +1,14 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from geopy.geocoders import Nominatim
-from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
 from math import radians, sin, cos, sqrt, atan2
 from supabase import create_client, Client
 from PIL import Image
 from io import BytesIO
 from functools import lru_cache
-import re
-import requests
 import os
 import uuid
+import re
+import requests
 
 # ============================== CONFIGURATION ==============================
 SUPABASE_URL = os.environ.get('SUPABASE_URL')
@@ -20,7 +18,6 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 app = Flask(__name__)
 CORS(app, resources={r'/*': {'origins': '*'}})
 
-g_eolocator = Nominatim(user_agent='ulat_ph_app_v1.0', timeout=15)
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
 
 # ============================== UTILITY FUNCTIONS ==============================
@@ -61,56 +58,12 @@ def update_report_counter(report_id, field):
         return None, 'Report not found'
 
     counter = response.data.get(field, {'count': 0})
-    counter['count'] = counter.get('count', 0) + 1  # ✅ Increment count
+    counter['count'] = counter.get('count', 0) + 1
 
     supabase.from_('reports').update({field: counter}).eq('id', report_id).execute()
     return counter, None
 
-# ============================== ROUTES ==============================
-
-@app.route('/reverse-geocode', methods=['POST'])
-def reverse_geocode():
-    data = request.get_json() or {}
-    latitude, longitude = data.get('latitude'), data.get('longitude')
-
-    if latitude is None or longitude is None:
-        return jsonify({'error': 'Latitude and longitude are required'}), 400
-
-    try:
-        lat, lon = float(latitude), float(longitude)
-        address = reverse_lookup(lat, lon)
-        return jsonify({'address': address}), 200
-    except (ValueError, TypeError):
-        return jsonify({'error': 'Invalid coordinates'}), 400
-    except Exception as e:
-        print(f"Error during reverse geocoding: {str(e)}", flush=True)
-        return jsonify({'error': 'Geocoding service error', 'fallback_address': f'{latitude}, {longitude}'}), 500
-
-@app.route('/geocode', methods=['POST'])
-def geocode():
-    data = request.get_json() or {}
-    address = data.get('address')
-    if not address:
-        return jsonify({'error': 'Address is required'}), 400
-
-    try:
-        location = fetch_geocode(address)
-        if location:
-            return jsonify({
-                'success': True,
-                'location_name': location['location_name'],
-                'latitude': location['latitude'],
-                'longitude': location['longitude']
-            }), 200
-
-        return jsonify({'success': False, 'message': 'Location not found'}), 404
-
-    except Exception as e:
-        print(f"Geocoding exception: {str(e)}", flush=True)
-        return jsonify({'success': False, 'message': f'Geocoding error: {str(e)}'}), 500
-
 # ============================== GEOCODING HELPERS ==============================
-
 def is_coordinates(text: str):
     """Checks if the query is a 'lat, lon' coordinate pair."""
     pattern = r'^-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?$'
@@ -119,7 +72,7 @@ def is_coordinates(text: str):
 def reverse_lookup(lat: float, lon: float):
     """
     Reverse geocodes coordinates to a Philippine city/barangay using BigDataCloud
-    (Free, generous rate limits, no shared-IP bans on Render).
+    (Free, no shared-IP bans on Render).
     """
     try:
         url = "https://api.bigdatacloud.net/data/reverse-geocode-client"
@@ -129,8 +82,7 @@ def reverse_lookup(lat: float, lon: float):
             data = res.json()
             locality = data.get("locality") or data.get("city") or data.get("principalSubdivision")
             country = data.get("countryName", "")
-            address = f"{locality}, {country}" if locality else f"{lat:.4f}, {lon:.4f}"
-            return address
+            return f"{locality}, {country}" if locality else f"{lat:.4f}, {lon:.4f}"
     except Exception as e:
         print(f"BigDataCloud reverse error: {e}", flush=True)
 
@@ -172,32 +124,29 @@ def fetch_geocode(address: str):
 
     return None
 
-# ------------------------------ Geocoding ------------------------------
+# ============================== ROUTES ==============================
+@app.route('/')
+def home():
+    return 'Hello, World!'
+
+# ------------------------------ Geocoding Routes ------------------------------
 @app.route('/reverse-geocode', methods=['POST'])
 def reverse_geocode():
-    data = request.get_json()
+    data = request.get_json() or {}
     latitude, longitude = data.get('latitude'), data.get('longitude')
 
     if latitude is None or longitude is None:
         return jsonify({'error': 'Latitude and longitude are required'}), 400
 
     try:
-        latitude, longitude = float(latitude), float(longitude)
+        lat, lon = float(latitude), float(longitude)
+        address = reverse_lookup(lat, lon)
+        return jsonify({'address': address}), 200
     except (ValueError, TypeError):
-        return jsonify({'error': 'Invalid latitude or longitude format'}), 400
-
-    try:
-        location = g_eolocator.reverse((latitude, longitude), language='en', exactly_one=True)
-        if not location:
-            return jsonify({'error': 'Unable to find an address', 'fallback_address': f'{latitude:.4f}, {longitude:.4f}'}), 404
-        return jsonify({'address': location.address}), 200
-    except GeocoderTimedOut:
-        return jsonify({'error': 'Geocoding service timed out', 'fallback_address': f'{latitude:.4f}, {longitude:.4f}'}), 503
-    except GeocoderUnavailable:
-        return jsonify({'error': 'Geocoding service unavailable', 'fallback_address': f'{latitude:.4f}, {longitude:.4f}'}), 503
+        return jsonify({'error': 'Invalid coordinates'}), 400
     except Exception as e:
         print(f"Error during reverse geocoding: {str(e)}", flush=True)
-        return jsonify({'error': 'Geocoding service error', 'fallback_address': f'{latitude:.4f}, {longitude:.4f}'}), 503
+        return jsonify({'error': 'Geocoding service error', 'fallback_address': f'{latitude}, {longitude}'}), 500
 
 @app.route('/geocode', methods=['POST'])
 def geocode():
@@ -215,14 +164,14 @@ def geocode():
                 'latitude': location['latitude'],
                 'longitude': location['longitude']
             }), 200
-            
+
         return jsonify({'success': False, 'message': 'Location not found'}), 404
 
     except Exception as e:
         print(f"Geocoding exception: {str(e)}", flush=True)
         return jsonify({'success': False, 'message': f'Geocoding error: {str(e)}'}), 500
 
-# ------------------------------ Reports ------------------------------
+# ------------------------------ Reports Routes ------------------------------
 @app.route('/api/reports', methods=['GET'])
 def get_reports():
     try:
@@ -326,11 +275,7 @@ def get_user_status(report_id):
         if not response.data:
             return jsonify({'success': False, 'message': 'Report not found'}), 404
 
-        sightings = response.data.get('sightings', {})
-        resolved = response.data.get('resolved', {})
-        return jsonify({
-            'success': True
-        })
+        return jsonify({'success': True})
     except Exception as e:
         return jsonify({'success': False, 'message': f'Error fetching user status: {str(e)}'}), 500
 
